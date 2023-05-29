@@ -12,6 +12,7 @@ import os
 import time
 import requests
 import zipfile
+import math
 
 
 def download_and_extract_data(url, folder_path):
@@ -60,18 +61,56 @@ def get_full_for_spikes(spike_df, df):
     return pivot_df
 
 
-def plotly_line(pivot_df):
-    colors = ['blue', 'green', 'purple', 'orange', 'red', 'pink', 'yellow', 'brown', 'cyan', 'magenta']
-    traces = []
-    for i in range(len(pivot_df)):
-        traces.append(go.Scatter(
-            x=pivot_df.columns[2:],  # years
-            y=pivot_df.iloc[i, 2:],  # counts
-            mode='lines+markers',  # add markers
-            name=f"{pivot_df.iloc[i, 0]} ({pivot_df.iloc[i, 1]})",  # name (sex)
-            line=dict(color=colors[i%len(colors)], shape='spline', width=2.5),  # smooth lines, and thicker width
-        ))
-    return traces
+
+def plot_decade(start_decade_year, end_decade_year, df, color_map):
+    
+    start_plot_year = start_decade_year - 1
+    end_plot_year = min(start_decade_year + 10, df['Year'].max())  # adjust end year to account for missing data
+    df_decade = df[(df['Year'] >= start_plot_year) & (df['Year'] <= end_plot_year)]
+    spike_df = find_spike(df_decade)
+    pivot_df = get_full_for_spikes(spike_df, df)
+
+    # Filter pivot_df for only the years within the current decade
+    year_cols = [col for col in pivot_df.columns if isinstance(col, int) and start_plot_year <= col <= end_plot_year]
+
+    pivot_df = pivot_df.loc[:, ['Name', 'Sex'] + year_cols]
+
+    traces = plotly_line(pivot_df, color_map)
+
+    fig = go.Figure()
+    max_y_value = 0
+    for trace in traces:
+        fig.add_trace(trace)
+        max_y_value = max(max_y_value, max(trace.y))  # update max y-value
+
+    y_axis_upper_limit = math.ceil(max_y_value / 1000) * 1000  # round up to the nearest thousand
+
+    fig.update_layout(title=f"The {start_decade_year}s", xaxis_range=[start_plot_year, end_plot_year])
+    fig.update_yaxes(range=[0, y_axis_upper_limit])  # update y-axis range
+
+    fig.update_layout(
+        font=dict(family="Arial"),
+        margin=dict(t=40),
+        height=300,
+        yaxis=dict(tickprefix="\xa0\xa0\xa0\xa0\xa0"),  # Add space before y-axis labels
+        title_x=.113,  # Align the title with the beginning of the y-axis
+    )
+
+    fig_name = f"fig_{start_decade_year}.png"
+    fig.write_image(fig_name)
+
+    time.sleep(1)  # wait for the file to be written
+
+    # Trim the image
+    img = Image.open(fig_name)
+    trimmed_img = trim_top_bottom(img, 0.00, 0.1)  # Adjust the percentages as desired
+    trimmed_fig_name = f"trimmed_{fig_name}"
+    trimmed_img.save(trimmed_fig_name)
+    # Remove the original image
+    os.remove(fig_name)
+    return trimmed_fig_name
+
+
 
 
 def find_spike(df):
@@ -90,43 +129,6 @@ def find_spike(df):
                   & (df['Abs_Increase'] > abs_increase_threshold)]
     spike_df = spike_df.sort_values(by='Abs_Increase', ascending=False).head(3)
     return spike_df
-
-
-def plot_decade(start_decade_year, end_decade_year, df):
-    start_plot_year = start_decade_year - 1
-    end_plot_year = min(start_decade_year + 10, df['Year'].max())  # adjust end year to account for missing data
-    df_decade = df[(df['Year'] >= start_plot_year) & (df['Year'] <= end_plot_year)]
-    spike_df = find_spike(df_decade)
-    pivot_df = get_full_for_spikes(spike_df, df)
-    year_cols = [col for col in pivot_df.columns[2:] if str(col).isdigit()]
-    pivot_df = pivot_df.loc[:, ['Name', 'Sex'] + [col for col in year_cols if start_plot_year <= int(col) <= end_plot_year]]
-    traces = plotly_line(pivot_df)
-    fig = go.Figure()
-    for trace in traces:
-        fig.add_trace(trace)
-    fig.update_layout(title=f"The {start_decade_year}s", xaxis_range=[start_plot_year, end_plot_year])
-    fig_name = f"fig_{start_decade_year}.png"
-    fig.update_layout(
-        title=f"The {start_decade_year}s",
-        xaxis_range=[start_plot_year, end_plot_year],
-        font=dict(family="Arial"),
-        margin=dict(t=40),
-        height=300,
-        yaxis=dict(tickprefix="\xa0\xa0\xa0\xa0\xa0"),  # Add space before y-axis labels
-        title_x=.113,  # Align the title with the beginning of the y-axis
-    )
-    time.sleep(1)  # wait for the file to be written
-    fig.write_image(fig_name)
-
-    # Trim the image
-    # Trim the image
-    img = Image.open(fig_name)
-    trimmed_img = trim_top_bottom(img, 0.00, 0.1)  # Adjust the percentages as desired
-    trimmed_fig_name = f"trimmed_{fig_name}"
-    trimmed_img.save(trimmed_fig_name)
-    # Remove the original image
-    os.remove(fig_name)
-    return trimmed_fig_name
 
 def trim_top_bottom(image, top_percentage, bottom_percentage):
     width, height = image.size
@@ -161,13 +163,45 @@ def combine_images(img_names):
 def main(start_year, end_year):
     df = read_and_combine_files(start_year - 1, end_year + 1)  # Adjusted to include the year before and after the decades
     img_names = []
+    spike_df_list = []
+
+    img_names = []
+    color_map = {}
     for start_decade_year in range(start_year, end_year + 1, 10):
         if start_decade_year + 10 <= end_year:
-            img_names.append(plot_decade(start_decade_year, start_decade_year + 10, df))
+            img_names.append(plot_decade(start_decade_year, start_decade_year + 10, df, color_map))  # Pass the color map to this function
+            df_decade = df[(df['Year'] >= start_decade_year) & (df['Year'] <= start_decade_year + 10)]
+            spike_df = find_spike(df_decade)
+            spike_df_list.append(spike_df)
     combine_images(img_names)
+    spike_info_df = pd.concat(spike_df_list, ignore_index=True)
+    return spike_info_df
+
+
+def plotly_line(pivot_df, color_map):
+    colors = ['blue', 'green', 'purple', 'orange', 'red', 'pink', 'yellow', 'brown', 'cyan', 'magenta']
+    traces = []
+    for i in range(len(pivot_df)):
+        # Get the name of the current series
+        name = pivot_df.iloc[i, 0]
+        # If this name hasn't been assigned a color yet, assign it the next available color
+        if name not in color_map:
+            color_map[name] = colors[len(color_map) % len(colors)]
+        # Use the color assigned to this name
+        color = color_map[name]
+        
+        traces.append(go.Scatter(
+            x=pivot_df.columns[2:],  # years
+            y=pivot_df.iloc[i, 2:],  # counts
+            mode='lines+markers',  # add markers
+            name=f"{name} ({pivot_df.iloc[i, 1]})",  # name (sex)
+            line=dict(color=color, shape='spline', width=2.5),  # smooth lines, and thicker width
+        ))
+    return traces
+
 
 if __name__ == '__main__':
     download_and_extract_data('https://www.ssa.gov/oact/babynames/names.zip', '..')
-    main(1960, 2020)  # Change the years here
+    spike_info_df=main(1960, 2020)  # Change the years here
 
 
